@@ -7,6 +7,7 @@ hashtag/tag generation for multiple platforms, and keyword density analysis.
 
 import re
 import random
+from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
@@ -195,7 +196,6 @@ class SEOOptimizer:
             List of title strings.
         """
         if year is None:
-            from datetime import datetime
             year = datetime.now().year
 
         verb = random.choice(self._POWER_VERBS)
@@ -314,7 +314,6 @@ class SEOOptimizer:
             ),
         ]
 
-        from datetime import datetime
         results: List[str] = []
         used_indices: set = set()
 
