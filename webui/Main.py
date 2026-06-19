@@ -889,7 +889,15 @@ elif current_step == 2:
     st.subheader(STEPS[2])
     st.caption("AI 自动生成脚本，或手动编辑文案")
 
-    params.video_subject = st.session_state.get("video_subject", "")
+    # 显示当前主题，为空时允许输入
+    subject = st.session_state.get("video_subject", "")
+    if subject:
+        st.info(f"🎯 当前主题: **{subject}**")
+    else:
+        subject = st.text_input("请输入视频主题", key="step3_subject_input").strip()
+        if subject:
+            st.session_state["video_subject"] = subject
+    params.video_subject = subject or st.session_state.get("video_subject", "")
     video_languages = [(tr("Auto Detect"), "")] + [(code, code) for code in support_locales]
     selected_index = st.selectbox(
         tr("Script Language"), index=0,
