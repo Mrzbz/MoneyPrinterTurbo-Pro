@@ -1326,6 +1326,9 @@ elif current_step == 4:
         # 从配置读取视频参数
         params.video_aspect = VideoAspect.portrait.value
         params.video_source = config.app.get("video_source", "pexels")
+        # 如果选了 local 但没有上传文件，回退到 pexels
+        if params.video_source == "local" and not uploaded_files:
+            params.video_source = "pexels"
         params.voice_name = config.ui.get("voice_name", "zh-CN-YunxiNeural-Male")
         params.voice_volume = config.ui.get("voice_volume", 1.0)
         params.voice_rate = config.ui.get("voice_rate", 1.0)
