@@ -1323,6 +1323,19 @@ elif current_step == 4:
             st.error(tr("Video Script and Subject Cannot Both Be Empty"))
             st.stop()
 
+        # 从配置读取视频参数
+        params.video_aspect = VideoAspect.portrait.value
+        params.video_source = config.app.get("video_source", "pexels")
+        params.voice_name = config.ui.get("voice_name", "zh-CN-YunxiNeural-Male")
+        params.voice_volume = config.ui.get("voice_volume", 1.0)
+        params.voice_rate = config.ui.get("voice_rate", 1.0)
+        params.bgm_type = "random"
+        params.bgm_volume = 0.2
+        params.subtitle_enabled = True
+        params.font_name = config.ui.get("font_name", "MicrosoftYaHeiBold.ttc")
+        params.text_fore_color = config.ui.get("text_fore_color", "#FFFFFF")
+        params.font_size = config.ui.get("font_size", 60)
+
         if uploaded_audio_file:
             task_dir = utils.task_dir(task_id)
             _, audio_ext = os.path.splitext(os.path.basename(uploaded_audio_file.name))
