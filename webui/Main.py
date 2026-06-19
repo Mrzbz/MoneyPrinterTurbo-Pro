@@ -739,23 +739,24 @@ if current_step == 0:
                                         st.session_state["niche_template_id"] = matched
                                         tmpl_data = _template_mgr.generate_prompt(matched, subject)
                                         tmpl_prompt = tmpl_data.get("script_prompt", "")
-                                    with st.status(f"🎬 正在生成「{subject}」的视频...", expanded=True) as status:
+                                    with st.container(border=True):
+                                        _progress = st.progress(0, text="🎬 正在生成视频...")
                                         st.write("📝 步骤 1/4: AI 生成脚本...")
                                         sr = _req.post("http://127.0.0.1:8080/api/v1/scripts",
                                             json={"video_subject": subject, "video_script_prompt": tmpl_prompt,
                                                    "paragraph_number": 1, "custom_system_prompt": ""}, timeout=120).json()
                                         script = sr.get("data", {}).get("video_script", "")
                                         if not script:
-                                            status.update(label="❌ 脚本生成失败", state="error")
+                                            st.error("❌ 脚本生成失败")
                                             st.stop()
-                                        st.write(f"   ✅ 脚本 ({len(script)} 字)")
-                                        st.write("🔍 步骤 2/4: 生成搜索关键词...")
+                                        st.success("   ✅ 脚本 (%d 字)" % len(script))
+                                        _progress.progress(25, text="🔍 生成搜索关键词...")
                                         tr_ = _req.post("http://127.0.0.1:8080/api/v1/terms",
                                             json={"video_subject": subject, "video_script": script, "amount": 5}, timeout=30).json()
                                         terms = tr_.get("data", {}).get("video_terms", [])
                                         terms_str = ", ".join(terms[:5]) if isinstance(terms, list) else terms
-                                        st.write(f"   ✅ 关键词: {terms_str}")
-                                        st.write("🎬 步骤 3/4: 提交视频合成...")
+                                        st.success("   ✅ 关键词: %s" % terms_str)
+                                        _progress.progress(50, text="🎬 提交视频合成...")
                                         vn = config.ui.get("voice_name", "zh-CN-YunxiNeural-Male")
                                         vr = _req.post("http://127.0.0.1:8080/api/v1/videos",
                                             json={"video_subject": subject, "video_script": script,
@@ -768,10 +769,10 @@ if current_step == 0:
                                                    "font_size": config.ui.get("font_size", 60)}, timeout=30).json()
                                         task_id = vr.get("data", {}).get("task_id", "")
                                         if not task_id:
-                                            status.update(label="❌ 视频任务提交失败", state="error")
+                                            st.error("❌ 视频任务提交失败")
                                             st.stop()
-                                        st.write(f"   ✅ 任务已提交")
-                                        st.write("⏳ 步骤 4/4: 等待视频合成...")
+                                        st.success("   ✅ 任务已提交")
+                                        _progress.progress(60, text="⏳ 等待视频合成...")
                                         last_progress = ""
                                         for _ in range(120):
                                             poll = _req.get(f"http://127.0.0.1:8080/api/v1/tasks/{task_id}", timeout=15).json()
@@ -779,20 +780,20 @@ if current_step == 0:
                                             state = task.get("state")
                                             progress = task.get("progress", "")
                                             if progress and progress != last_progress:
-                                                st.write(f"     [{progress}%]")
+                                                _progress.progress(min(int(progress) + 60, 95), text="视频合成中 %s%%..." % progress)
                                                 last_progress = progress
                                             if state in (1, -1):
                                                 videos = task.get("videos", []) or task.get("combined_videos", [])
                                                 if videos:
                                                     url = videos[0] if videos[0].startswith("http") else f"http://127.0.0.1:8080{videos[0]}"
-                                                    status.update(label=f"✅ 视频生成完成!", state="complete")
+                                                    _progress.progress(100, text="✅ 视频生成完成!")
                                                     st.video(url)
                                                     st.success(f"🎉 视频已生成!")
                                                 else:
-                                                    status.update(label="⚠️ 已完成但未找到视频", state="error")
+                                                    st.error("⚠️ 已完成但未找到视频")
                                                 break
                                             if state in (2, 3):
-                                                status.update(label=f"❌ 生成失败: {task.get('error', '未知错误')}", state="error")
+                                                st.error(f"❌ 生成失败: {task.get('error', '未知错误')}")
                                                 break
                                             _time.sleep(5)
 
