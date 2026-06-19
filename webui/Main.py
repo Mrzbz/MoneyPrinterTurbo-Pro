@@ -24,7 +24,42 @@ from app.models.schema import (
 )
 from app.services import llm, voice
 from app.services import task as tm
+from app.templates import get_template_manager
+from app.services.trending import TrendingService
 from app.utils import utils
+
+# 赛道自动匹配关键词映射
+TEMPLATE_KEYWORDS = {
+    "finance": ["理财", "投资", "股票", "基金", "经济", "财富", "钱", "赚钱", "省钱",
+                "保险", "房产", "财经", "金融", "美元", "比特币", "黄金", "消费", "收入", "工资", "物价"],
+    "health": ["健康", "养生", "健身", "运动", "减肥", "饮食", "睡眠", "中医", "身体",
+               "医疗", "药", "瑜伽", "跑步", "营养", "保健", "湿气", "体质", "免疫力"],
+    "tech": ["科技", "数码", "手机", "电脑", "AI", "人工智能", "软件", "编程", "互联网",
+             "游戏", "芯片", "机器人", "5G", "应用", "APP", "数据", "算法", "自动驾驶"],
+    "education": ["教育", "学习", "考试", "知识", "科普", "学校", "大学", "高考",
+                  "英语", "读书", "阅读", "留学", "考研", "育儿", "培训"],
+    "food": ["美食", "菜谱", "做饭", "烹饪", "食材", "餐厅", "零食", "饮料", "咖啡",
+             "茶", "烘焙", "早餐", "晚餐", "小吃", "端午", "粽子"],
+    "motivation": ["励志", "成功", "人生", "心态", "成长", "坚持", "奋斗", "自律",
+                   "改变", "梦想", "勇气", "自信", "逆境", "努力"],
+    "story": ["故事", "悬疑", "真相", "揭秘", "恐怖", "小说", "案件", "秘密",
+              "经历", "遭遇", "传闻", "内幕", "反转"],
+    "travel": ["旅游", "旅行", "攻略", "景点", "酒店", "机票", "签证", "出行",
+               "自驾", "度假", "探险", "民宿", "打卡"],
+}
+
+
+def auto_match_template(topic: str) -> str | None:
+    """根据话题关键词自动匹配最佳赛道"""
+    topic_lower = topic.lower()
+    scores = {}
+    for tmpl_id, keywords in TEMPLATE_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in topic)
+        if score > 0:
+            scores[tmpl_id] = score
+    if not scores:
+        return None
+    return max(scores, key=scores.get)
 
 st.set_page_config(
     page_title="MoneyPrinterTurbo",
@@ -549,7 +584,280 @@ params = VideoParams(video_subject="")
 uploaded_files = []
 uploaded_audio_file = None
 
+# --- 赛道模板系统 ---
+_template_mgr = get_template_manager()
+_available_templates = _template_mgr.list_templates()
+
 with left_panel:
+    # --- 热点选题 ---
+    with st.expander(tr("Trending Topics"), expanded=False):
+        platform_labels = {
+            "douyin": "抖音",
+            "weibo": "微博",
+            "bilibili": "B站",
+            "zhihu": "知乎",
+            "baidu": "百度",
+        }
+        trend_cols = st.columns(5)
+        selected_platforms = []
+        for i, (plat_key, plat_label) in enumerate(platform_labels.items()):
+            with trend_cols[i]:
+                if st.checkbox(plat_label, value=True, key=f"trend_plat_{plat_key}"):
+                    selected_platforms.append(plat_key)
+
+        if not selected_platforms:
+            selected_platforms = list(platform_labels.keys())
+
+        fetch_col, idea_col = st.columns([1, 1])
+        with fetch_col:
+            fetch_clicked = st.button(tr("Fetch Trending Data"), type="primary", use_container_width=True)
+        with idea_col:
+            idea_clicked = st.button(tr("Generate Content Ideas"), use_container_width=True)
+
+        if fetch_clicked:
+            with st.spinner(tr("Fetching trending data from platforms...")):
+                try:
+                    svc = TrendingService()
+                    items = svc.fetch_all(platforms=selected_platforms, limit=20)
+                    if items:
+                        analyses = svc.analyse(top_n=15)
+                        ideas = svc.ideas(count=8)
+                        st.session_state["trend_items"] = items
+                        st.session_state["trend_analyses"] = analyses
+                        st.session_state["trend_ideas"] = ideas
+                        st.success(f"✅ 从 {len(selected_platforms)} 个平台获取了 {len(items)} 条热榜数据")
+                    else:
+                        st.warning(tr("Failed to fetch trending data"))
+                except Exception as e:
+                    st.error(f"爬取失败: {e}")
+
+        if idea_clicked and st.session_state.get("trend_analyses"):
+            analyses = st.session_state["trend_analyses"]
+            svc = TrendingService()
+            ideas = svc.ideas(count=8, analyses=analyses)
+            st.session_state["trend_ideas"] = ideas
+            st.success(f"✅ 生成了 {len(ideas)} 个选题建议")
+
+        if st.session_state.get("trend_items") or st.session_state.get("trend_analyses"):
+            tab1, tab2, tab3 = st.tabs([tr("Trending List"), tr("Trend Analysis"), tr("Content Ideas")])
+
+            # Tab 1: 热榜列表
+            with tab1:
+                items = st.session_state.get("trend_items", [])
+                if items:
+                    for plat in selected_platforms:
+                        plat_items = [it for it in items if it.platform == plat]
+                        if plat_items:
+                            label = platform_labels.get(plat, plat)
+                            st.write(f"**{label}** ({len(plat_items)}条)")
+                            for it in plat_items[:15]:
+                                c1, c2 = st.columns([0.1, 0.9])
+                                with c1:
+                                    st.write(f"#{it.rank}")
+                                with c2:
+                                    st.write(it.title)
+
+            # Tab 2: 跨平台分析
+            with tab2:
+                analyses = st.session_state.get("trend_analyses", [])
+                if analyses:
+                    for i, ta in enumerate(analyses[:12]):
+                        platforms_str = ", ".join(
+                            platform_labels.get(p, p) for p in ta.platforms
+                        )
+                        score_disp = f"{ta.composite_score:.0f}"
+                        with st.container(border=True):
+                            cols = st.columns([0.7, 0.2, 0.1])
+                            with cols[0]:
+                                st.write(f"**{i+1}. {ta.keyword}**")
+                                st.caption(f"平台: {platforms_str}")
+                            with cols[1]:
+                                st.write(f"热度: {score_disp}")
+                            with cols[2]:
+                                if st.button(tr("Select"), key=f"trend_apply_{i}", use_container_width=True):
+                                    st.session_state["video_subject"] = ta.keyword
+                                    matched = auto_match_template(ta.keyword)
+                                    if matched:
+                                        st.session_state["niche_template_id"] = matched
+                                        st.success(f"✅ 已选: {ta.keyword} + {tr('template_%s_name' % matched)}")
+                                    else:
+                                        st.success(f"已选选题: {ta.keyword}")
+
+            # Tab 3: 选题创意
+            with tab3:
+                ideas = st.session_state.get("trend_ideas", [])
+                if ideas:
+                    for i, idea in enumerate(ideas):
+                        with st.container(border=True):
+                            st.write(f"**{i+1}. {idea.title}**")
+                            st.caption(f"📝 {idea.hook}")
+                            tags_str = ", ".join(idea.tags)
+                            st.write(f"🏷️ {tags_str}")
+                            en_level = {"high": "🔥 高", "medium": "📊 中", "low": "📉 低"}
+                            st.write(f"📈 预估互动: {en_level.get(idea.estimated_engagement, idea.estimated_engagement)}")
+                            if st.button(tr("Apply as Subject"), key=f"idea_apply_{i}", use_container_width=True):
+                                st.session_state["video_subject"] = idea.title
+                                st.session_state["video_script_prompt"] = idea.hook
+                                # 自动匹配赛道
+                                matched = auto_match_template(idea.title)
+                                if matched:
+                                    st.session_state["niche_template_id"] = matched
+                                    st.success(f"✅ 已选选题 + 自动匹配赛道: {tr('template_%s_name' % matched)}")
+                                else:
+                                    st.success(f"✅ 已选选题: {idea.title}")
+
+                            # 一键出视频按钮
+                            import requests as _req
+                            if st.button("🚀 " + tr("One-Click Generate Video"), key=f"idea_quick_{i}", type="primary", use_container_width=True):
+                                subject = idea.title
+                                st.session_state["video_subject"] = subject
+
+                                # 自动匹配赛道
+                                matched = auto_match_template(subject)
+                                tmpl_prompt = ""
+                                if matched:
+                                    st.session_state["niche_template_id"] = matched
+                                    tmpl_data = _template_mgr.generate_prompt(matched, subject)
+                                    tmpl_prompt = tmpl_data.get("script_prompt", "")
+
+                                with st.status(f"🎬 正在生成「{subject}」的视频...", expanded=True) as status:
+                                    st.write("📝 步骤 1/4: AI 生成脚本...")
+                                    script_resp = _req.post(
+                                        "http://127.0.0.1:8080/api/v1/scripts",
+                                        json={"video_subject": subject, "video_script_prompt": tmpl_prompt,
+                                               "paragraph_number": 1, "custom_system_prompt": ""},
+                                        timeout=120,
+                                    ).json()
+                                    script = script_resp.get("data", {}).get("video_script", "")
+                                    if not script:
+                                        status.update(label="❌ 脚本生成失败", state="error")
+                                        st.stop()
+                                    st.write(f"   ✅ 脚本 ({len(script)} 字)")
+
+                                    st.write("🔍 步骤 2/4: 生成搜索关键词...")
+                                    terms_resp = _req.post(
+                                        "http://127.0.0.1:8080/api/v1/terms",
+                                        json={"video_subject": subject, "video_script": script, "amount": 5},
+                                        timeout=30,
+                                    ).json()
+                                    terms = terms_resp.get("data", {}).get("video_terms", [])
+                                    if isinstance(terms, str):
+                                        terms = [t.strip() for t in terms.split(",") if t.strip()]
+                                    terms_str = ", ".join(terms[:5])
+                                    st.write(f"   ✅ 关键词: {terms_str}")
+
+                                    st.write("🎬 步骤 3/4: 提交视频合成...")
+                                    voice_name = config.ui.get("voice_name", "zh-CN-YunxiNeural-Male")
+                                    video_resp = _req.post(
+                                        "http://127.0.0.1:8080/api/v1/videos",
+                                        json={
+                                            "video_subject": subject,
+                                            "video_script": script,
+                                            "video_terms": terms_str,
+                                            "video_aspect": "9:16",
+                                            "video_count": 1,
+                                            "video_source": "pexels",
+                                            "voice_name": voice_name,
+                                            "voice_volume": 1.0,
+                                            "voice_rate": 1.0,
+                                            "bgm_type": "random",
+                                            "bgm_volume": 0.2,
+                                            "subtitle_enabled": True,
+                                            "font_name": config.ui.get("font_name", "MicrosoftYaHeiBold.ttc"),
+                                            "text_fore_color": config.ui.get("text_fore_color", "#FFFFFF"),
+                                            "font_size": config.ui.get("font_size", 60),
+                                        },
+                                        timeout=30,
+                                    ).json()
+                                    task_id = video_resp.get("data", {}).get("task_id", "")
+                                    if not task_id:
+                                        status.update(label="❌ 视频任务提交失败", state="error")
+                                        st.stop()
+                                    st.write(f"   ✅ 任务已提交: {task_id[:8]}...")
+
+                                    st.write("⏳ 步骤 4/4: 等待视频合成...")
+                                    import time as _time
+                                    last_progress = ""
+                                    for _ in range(120):  # 最多等 10 分钟
+                                        poll = _req.get(
+                                            f"http://127.0.0.1:8080/api/v1/tasks/{task_id}",
+                                            timeout=15,
+                                        ).json()
+                                        task = poll.get("data", {})
+                                        state = task.get("state")
+                                        progress = task.get("progress", "")
+                                        if progress and progress != last_progress:
+                                            st.write(f"     [{progress}%]")
+                                            last_progress = progress
+                                        if state in (1, -1):  # completed
+                                            videos = task.get("videos", []) or task.get("combined_videos", [])
+                                            if videos:
+                                                url = videos[0]
+                                                if url.startswith("/"):
+                                                    url = f"http://127.0.0.1:8080{url}"
+                                                status.update(label=f"✅ 视频生成完成!", state="complete")
+                                                st.video(url)
+                                                st.success(f"🎉 视频已生成! [播放]({url})")
+                                            else:
+                                                status.update(label="⚠️ 已完成但未找到视频", state="error")
+                                            break
+                                        if state in (2, 3):  # failed
+                                            err = task.get("error", "未知错误")
+                                            status.update(label=f"❌ 生成失败: {err}", state="error")
+                                            break
+                                        _time.sleep(5)
+
+    # --- 赛道模板系统 ---
+    with st.container(border=True):
+        st.write(tr("Niche Template System"))
+
+        template_options = []
+        template_ids = []
+        for t in _available_templates:
+            template_ids.append(t["id"])
+            _tname = tr("template_%s_name" % t["id"])
+            template_options.append(f"{t['icon']} {_tname}")
+
+        if "niche_template_id" not in st.session_state:
+            st.session_state["niche_template_id"] = template_ids[0]
+
+        selected_idx = st.selectbox(
+            tr("Select Template"),
+            options=range(len(template_options)),
+            format_func=lambda x: template_options[x],
+            index=template_ids.index(st.session_state["niche_template_id"])
+            if st.session_state["niche_template_id"] in template_ids
+            else 0,
+            key="niche_template_selector",
+        )
+
+        selected_template_id = template_ids[selected_idx]
+        selected_template = _template_mgr.get_template(selected_template_id)
+
+        if selected_template:
+            st.caption(tr("template_%s_desc" % selected_template_id))
+            with st.expander(tr("Template Details"), expanded=False):
+                col_v, col_m = st.columns(2)
+                with col_v:
+                    st.markdown(f"**{tr('Visual Style')}**")
+                    st.code(selected_template.visual_style.describe())
+                with col_m:
+                    st.markdown(f"**{tr('Music Info')}**")
+                    st.code(selected_template.music_style.describe())
+                st.markdown(f"**{tr('Hashtags Example')}**")
+                st.code(" ".join(selected_template.hashtags[:6]))
+
+        if st.button(tr("Apply Template to Script"), key="apply_template", use_container_width=True):
+            subject = st.session_state.get("video_subject", "")
+            if not subject:
+                st.warning(tr("Please enter a Video Subject first for best results"))
+            prompt_data = _template_mgr.generate_prompt(
+                selected_template_id, subject or "your topic"
+            )
+            st.session_state["video_script_prompt"] = prompt_data["script_prompt"]
+            st.session_state["niche_template_id"] = selected_template_id
+            st.success(tr("Template applied to Custom Script Requirements!"))
+
     with st.container(border=True):
         st.write(tr("Video Script Settings"))
         params.video_subject = st.text_input(

@@ -76,13 +76,14 @@ class ContentIdea:
 _SESSION = requests.Session()
 _SESSION.headers.update({
     "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/125.0.0.0 Safari/537.36"
+        "Chrome/132.0.0.0 Safari/537.36"
     ),
     "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
 })
-_TIMEOUT = 10
+_TIMEOUT = 15
 
 
 def _ts() -> str:
@@ -94,7 +95,9 @@ def scrape_douyin(limit: int = 30) -> list[TrendItem]:
     url = "https://www.douyin.com/aweme/v1/web/hot/search/list/"
     items: list[TrendItem] = []
     try:
-        resp = _SESSION.get(url, timeout=_TIMEOUT)
+        resp = _SESSION.get(url, timeout=_TIMEOUT, headers={
+            "Referer": "https://www.douyin.com/",
+        })
         resp.raise_for_status()
         data = resp.json().get("data", {})
         word_list = data.get("word_list", [])
@@ -107,9 +110,74 @@ def scrape_douyin(limit: int = 30) -> list[TrendItem]:
                 url=f"https://www.douyin.com/search/{entry.get('word', '')}",
                 fetched_at=_ts(),
             ))
+        # Fallback: try the hot-search page if API returned empty
+        if not items:
+            logger.info("Douyin API returned empty, trying page scrape...")
+            items = _scrape_douyin_page(limit)
     except Exception as exc:
         logger.warning("Douyin scrape failed: %s", exc)
+        # Fallback: try page scrape
+        try:
+            items = _scrape_douyin_page(limit)
+        except Exception:
+            pass
     return items
+
+
+def _scrape_douyin_page(limit: int = 30) -> list[TrendItem]:
+    """Fallback: parse douyin hot search from SSR page."""
+    url = "https://www.douyin.com/hot/search/"
+    resp = _SESSION.get(url, timeout=_TIMEOUT, headers={
+        "Referer": "https://www.douyin.com/",
+    })
+    resp.raise_for_status()
+    import re
+    # Try to find initial state in the HTML
+    # Pattern 1: __INITIAL_STATE__ in script tag
+    match = re.search(r'<script[^>]*>window\.__INITIAL_STATE__\s*=\s*({.*?});?\s*</script>', resp.text, re.DOTALL)
+    if match:
+        import json
+        data = json.loads(match.group(1))
+        word_list = (data.get("hotSearch", {})
+                     .get("hotSearch", {})
+                     .get("wordsList", [])
+                     .get("wordsList", data.get("hotSearch", {})
+                          .get("wordsList", [])))
+        if not word_list:
+            # Try alternative path
+            word_list = data.get("defaultSearchWords", [])
+        items: list[TrendItem] = []
+        for i, entry in enumerate(word_list[:limit]):
+            items.append(TrendItem(
+                platform="douyin",
+                rank=i + 1,
+                title=entry.get("word", ""),
+                hot_score=int(entry.get("hot_value", entry.get("hotValue", 0))),
+                url=f"https://www.douyin.com/search/{entry.get('word', '')}",
+                fetched_at=_ts(),
+            ))
+        return items
+    # Pattern 2: try script content with JSON
+    scripts = re.findall(r'<script[^>]*id="__NEXT_DATA__"[^>]*>({.*?})</script>', resp.text, re.DOTALL)
+    if scripts:
+        import json
+        data = json.loads(scripts[0])
+        word_list = (data.get("props", {})
+                     .get("pageProps", {})
+                     .get("hotSearchData", {})
+                     .get("wordsList", []))
+        items = []
+        for i, entry in enumerate(word_list[:limit]):
+            items.append(TrendItem(
+                platform="douyin",
+                rank=i + 1,
+                title=entry.get("word", ""),
+                hot_score=int(entry.get("hotValue", 0)),
+                url=f"https://www.douyin.com/search/{entry.get('word', '')}",
+                fetched_at=_ts(),
+            ))
+        return items
+    return []
 
 
 def scrape_weibo(limit: int = 30) -> list[TrendItem]:
@@ -117,7 +185,11 @@ def scrape_weibo(limit: int = 30) -> list[TrendItem]:
     url = "https://weibo.com/ajax/side/hotSearch"
     items: list[TrendItem] = []
     try:
-        resp = _SESSION.get(url, timeout=_TIMEOUT)
+        resp = _SESSION.get(url, timeout=_TIMEOUT, headers={
+            "Referer": "https://weibo.com/",
+            "Accept": "application/json, text/plain, */*",
+            "Cookie": "SUB=_2AkMSpZSVf8NxqwJRmP0Wz2mjaYxywjDEieKgQ7XJRMxHRl-yT8XkqQ4OtRB6OeT-aZ_Bc7Ay-dmTSm_sWVPbKJIUWgpx",
+        })
         resp.raise_for_status()
         realtime = resp.json().get("data", {}).get("realtime", [])
         for i, entry in enumerate(realtime[:limit]):
@@ -160,33 +232,65 @@ def scrape_bilibili(limit: int = 30) -> list[TrendItem]:
 
 
 def scrape_zhihu(limit: int = 30) -> list[TrendItem]:
-    """Scrape Zhihu hot list."""
-    url = "https://www.zhihu.com/api/v3/feed/topstory/hot-lists/total"
+    """Scrape Zhihu hot list - try multiple endpoints."""
     items: list[TrendItem] = []
+    # Try 1: guest explore feed (no auth required)
     try:
-        resp = _SESSION.get(url, timeout=_TIMEOUT, headers={
-            "Referer": "https://www.zhihu.com/hot",
-        })
-        resp.raise_for_status()
-        data = resp.json().get("data", [])
-        for i, entry in enumerate(data[:limit]):
-            target = entry.get("target", {})
-            title = target.get("title", "")
-            excerpt = target.get("excerpt", "")
-            heat = int(entry.get("detail_text", "0").replace("万热度", "").replace(" 热度", "").strip() or 0)
-            if "万" in entry.get("detail_text", ""):
-                heat *= 10000
-            items.append(TrendItem(
-                platform="zhihu",
-                rank=i + 1,
-                title=title,
-                hot_score=heat,
-                url=f"https://www.zhihu.com/question/{target.get('id', '')}",
-                description=excerpt,
-                fetched_at=_ts(),
-            ))
+        resp = _SESSION.get(
+            "https://www.zhihu.com/api/v3/explore/guest/feeds",
+            timeout=_TIMEOUT, params={"limit": limit},
+            headers={"Accept": "application/json"},
+        )
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            for i, entry in enumerate(data[:limit]):
+                target = entry.get("target", {})
+                # Answers: title is in question.title
+                title = target.get("title", "") or target.get("question", {}).get("title", "")
+                if not title:
+                    continue
+                vote_count = target.get("voteup_count", 0)
+                comment_count = target.get("comment_count", 0)
+                hot_score = vote_count * 10 + comment_count * 5
+                question_id = target.get("question", {}).get("id", target.get("id", ""))
+                items.append(TrendItem(
+                    platform="zhihu",
+                    rank=i + 1,
+                    title=title,
+                    hot_score=hot_score,
+                    url=f"https://www.zhihu.com/question/{question_id}",
+                    description=target.get("excerpt", ""),
+                    fetched_at=_ts(),
+                ))
     except Exception as exc:
-        logger.warning("Zhihu scrape failed: %s", exc)
+        logger.warning("Zhihu guest feed failed: %s", exc)
+
+    # Try 2: scrape hot list from HTML
+    if not items:
+        try:
+            resp = _SESSION.get("https://www.zhihu.com/hot", timeout=_TIMEOUT, headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "text/html,application/xhtml+xml",
+            })
+            if resp.status_code == 200:
+                import re, html, json
+                state_match = re.search(r'data-state="({.*?})"', resp.text)
+                if state_match:
+                    data = json.loads(html.unescape(state_match.group(1)))
+                    hot_list = (data.get("hotListData", {})
+                                .get("hotList", [])
+                                .get("list", []))
+                    for i, entry in enumerate(hot_list[:limit]):
+                        title = entry.get("title", "")
+                        if title:
+                            items.append(TrendItem(
+                                platform="zhihu", rank=i + 1,
+                                title=title, hot_score=int(entry.get("heat", 0)),
+                                url=entry.get("url", ""), fetched_at=_ts(),
+                            ))
+        except Exception as exc:
+            logger.warning("Zhihu HTML scrape failed: %s", exc)
+
     return items
 
 
@@ -198,18 +302,22 @@ def scrape_baidu(limit: int = 30) -> list[TrendItem]:
         resp = _SESSION.get(url, timeout=_TIMEOUT)
         resp.raise_for_status()
         cards = resp.json().get("data", {}).get("cards", [])
-        if cards:
-            content_list = cards[0].get("content", [])
-            for i, entry in enumerate(content_list[:limit]):
-                items.append(TrendItem(
-                    platform="baidu",
-                    rank=i + 1,
-                    title=entry.get("word", ""),
-                    hot_score=int(entry.get("hotScore", 0)),
-                    url=entry.get("url", ""),
-                    description=entry.get("desc", ""),
-                    fetched_at=_ts(),
-                ))
+        for card in cards:
+            for section in card.get("content", []):
+                content_list = section.get("content", [])
+                for i, entry in enumerate(content_list[:limit]):
+                    word = entry.get("word", "")
+                    if not word:
+                        continue
+                    items.append(TrendItem(
+                        platform="baidu",
+                        rank=i + 1,
+                        title=word,
+                        hot_score=int(entry.get("hotScore", 0)),
+                        url=entry.get("url", ""),
+                        description=entry.get("desc", ""),
+                        fetched_at=_ts(),
+                    ))
     except Exception as exc:
         logger.warning("Baidu scrape failed: %s", exc)
     return items
