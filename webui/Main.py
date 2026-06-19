@@ -742,7 +742,7 @@ if current_step == 0:
                                     with st.container(border=True):
                                         _progress = st.progress(0, text="🎬 正在生成视频...")
                                         st.write("📝 步骤 1/4: AI 生成脚本...")
-                                        sr = _req.post("http://127.0.0.1:8080/api/v1/scripts",
+                                        sr = _req.post("http://moneyprinterturbo-api:8080/api/v1/scripts",
                                             json={"video_subject": subject, "video_script_prompt": tmpl_prompt,
                                                    "paragraph_number": 1, "custom_system_prompt": ""}, timeout=120).json()
                                         script = sr.get("data", {}).get("video_script", "")
@@ -751,14 +751,14 @@ if current_step == 0:
                                             st.stop()
                                         st.success("   ✅ 脚本 (%d 字)" % len(script))
                                         _progress.progress(25, text="🔍 生成搜索关键词...")
-                                        tr_ = _req.post("http://127.0.0.1:8080/api/v1/terms",
+                                        tr_ = _req.post("http://moneyprinterturbo-api:8080/api/v1/terms",
                                             json={"video_subject": subject, "video_script": script, "amount": 5}, timeout=30).json()
                                         terms = tr_.get("data", {}).get("video_terms", [])
                                         terms_str = ", ".join(terms[:5]) if isinstance(terms, list) else terms
                                         st.success("   ✅ 关键词: %s" % terms_str)
                                         _progress.progress(50, text="🎬 提交视频合成...")
                                         vn = config.ui.get("voice_name", "zh-CN-YunxiNeural-Male")
-                                        vr = _req.post("http://127.0.0.1:8080/api/v1/videos",
+                                        vr = _req.post("http://moneyprinterturbo-api:8080/api/v1/videos",
                                             json={"video_subject": subject, "video_script": script,
                                                    "video_terms": terms_str, "video_aspect": "9:16", "video_count": 1,
                                                    "video_source": "pexels", "voice_name": vn,
@@ -775,7 +775,7 @@ if current_step == 0:
                                         _progress.progress(60, text="⏳ 等待视频合成...")
                                         last_progress = ""
                                         for _ in range(120):
-                                            poll = _req.get(f"http://127.0.0.1:8080/api/v1/tasks/{task_id}", timeout=15).json()
+                                            poll = _req.get(f"http://moneyprinterturbo-api:8080/api/v1/tasks/{task_id}", timeout=15).json()
                                             task = poll.get("data", {})
                                             state = task.get("state")
                                             progress = task.get("progress", "")
